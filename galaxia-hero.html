@@ -29,7 +29,6 @@
   <section class="hero">
     <canvas id="vortex"></canvas>
     <div class="hero__content">
-      <!-- <h1>Sua headline aqui</h1> -->
     </div>
   </section>
 
@@ -43,11 +42,10 @@
 
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
     const smooth = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
-    // ruído de valor 1D suave (coerente) — sem dependências
     const fract = (x) => x - Math.floor(x);
     const h1 = (n) => fract(Math.sin(n) * 43758.5453);
     function vnoise(x) { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f); return h1(i) + (h1(i + 1) - h1(i)) * u; }
-    const snoise = (x) => vnoise(x) * 2 - 1; // -1..1 suave
+    const snoise = (x) => vnoise(x) * 2 - 1;
 
     const CYAN      = new THREE.Color(0x2fb6cf);
     const CYAN_DEEP = new THREE.Color(0x1f93ad);
@@ -57,49 +55,41 @@
     const CONFIG = {
       bg: 0x010913,
 
-      // MODELO: camadas concêntricas (círculos ao redor do centro), NÃO braços.
-      // Cada camada = 1 círculo dividido em arcos ciano/branco alternados.
-      // O vórtice nasce da torção acumulada de cada camada em relação à anterior.
-      layers: 25,            // nº de camadas (fora -> centro)
-      rMin: 0.06,            // raio da camada mais interna
-      rMax: 1.0,             // raio da camada externa
-      radiusPow: 2.0,        // distribuição dos raios (>1 = centro mais denso)
-      layerTwist: 0.30,      // torção por camada (rad) -> o efeito de vórtice
-      arcs: 4,               // divisões de cor por camada (4 = ciano/branco/ciano/branco)
+      layers: 25,
+      rMin: 0.06,
+      rMax: 1.0,
+      radiusPow: 2.0,
+      layerTwist: 0.30,
+      arcs: 4,
 
-      dotMin: 0.002,         // bolinha nas camadas internas
-      dotMax: 0.032,         // bolinha nas camadas externas (mais grossas)
-      sizePow: 1.0,          // crescimento do tamanho fora
-      spacing: 1.28,         // bolinhas juntas no arco -> escorrimento
+      dotMin: 0.002,
+      dotMax: 0.032,
+      sizePow: 1.0,
+      spacing: 1.28,
 
-      // gradiente cíclico dentro de cada arco (azul/branco):
-      // a 1ª bolinha do arco nasce bem pequena e cresce até o fim dele.
-      arcGrowMin: 0.02,      // escala da 1ª bolinha do arco (bem pequena)
-      arcGrowPow: 0.50,      // curva do crescimento dentro do arco
-      flowSpeed: 0.0,        // fase estática -> o movimento vem da rotação do vórtice
+      arcGrowMin: 0.02,
+      arcGrowPow: 0.50,
+      flowSpeed: 0.0,
 
       sparkleChance: 0.04,
-      diskThick: 0.012,      // disco fino (galáxia) -> camadas alinhadas
-      depthFreq: 0.6,        // ondulação suave do Z (ruído coerente)
-      sizeRipple: 0.10,      // variação local suave de tamanho
+      diskThick: 0.012,
+      depthFreq: 0.6,
+      sizeRipple: 0.10,
       sizeRippleFreq: 0.9,
 
       spinSpeed: prefersReduced ? 0.0 : 0.085,
-      spinDir: 1,            // sentido do giro: 1 = horário invertido (anti-horário), -1 = original
+      spinDir: 1,
       twinkle: prefersReduced ? 0.0 : 0.12,
       glowStrength: 0.40,
       glowScale: 3.3,
 
       tilt: -0.72,
       yaw: 0.16,
-      // enquadramento vertical: sobe a galáxia para compensar a perspectiva do disco
-      // inclinado (a metade próxima da câmera "cresce" para baixo). 0 = sem correção.
       centerLift: 0.48,
       parallax: 0.10,
       stars: 1900,
     };
 
-    // ---------------- cena / câmera ----------------
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(CONFIG.bg);
     scene.fog = new THREE.FogExp2(CONFIG.bg, 0.02);
@@ -120,16 +110,12 @@
     const spinGroup = new THREE.Group();
     tiltGroup.add(spinGroup);
 
-    // ============================================================
-    // GALÁXIA — camadas concêntricas (círculos) com torção por camada
-    // ============================================================
     function thickness(r) { return CONFIG.diskThick * smooth(0.05, 0.6, r); }
 
-    // tamanho da bolinha pela camada (interna pequena -> externa grande)
     function ringDotSize(f) {
       return CONFIG.dotMin + (CONFIG.dotMax - CONFIG.dotMin) * Math.pow(f, CONFIG.sizePow);
     }
-    // cor por arco: alterna ciano / branco (4 arcos = ciano,branco,ciano,branco)
+
     function arcColor(arcIndex, f) {
       const cyan = (arcIndex % 2 === 0);
       const c = cyan
@@ -138,7 +124,6 @@
       return c.multiplyScalar(0.9 + Math.random() * 0.14);
     }
 
-    // gera (e regenera) a geometria a partir da CONFIG atual
     function buildGalaxyGeometry() {
       const P = [], S = [], O = [], C = [], G = [], R = [], Nn = [], AP = [];
       const push = (x, y, z, size, op, color, glow, radius, arcPos) => {
@@ -151,21 +136,20 @@
       const L = Math.max(2, Math.round(CONFIG.layers));
       const arcs = Math.max(2, Math.round(CONFIG.arcs));
       for (let i = 0; i < L; i++) {
-        const f = i / (L - 1);                                   // 0 centro .. 1 externa
+        const f = i / (L - 1);
         const radius = CONFIG.rMin + (CONFIG.rMax - CONFIG.rMin) * Math.pow(f, CONFIG.radiusPow);
-        const ringRot = i * CONFIG.layerTwist;                   // torção acumulada -> vórtice
+        const ringRot = i * CONFIG.layerTwist;
         const dR = ringDotSize(f);
 
-        // nº de bolinhas p/ espaçamento de arco ~ constante (escorrimento)
         const circ = 2 * Math.PI * radius;
         const gap = 2 * dR * CONFIG.spacing;
         const nDots = Math.max(arcs * 2, Math.round(circ / gap));
 
         for (let m = 0; m < nDots; m++) {
-          const frac = m / nDots;                                // 0..1 em volta da camada
-          const ang = ringRot + frac * Math.PI * 2;              // bolinha girada com a camada
-          const arcIndex = Math.floor(frac * arcs);              // qual arco (cor)
-          const arcPos = frac * arcs - arcIndex;                 // 0..1 dentro do arco (1ª bolinha = 0)
+          const frac = m / nDots;
+          const ang = ringRot + frac * Math.PI * 2;
+          const arcIndex = Math.floor(frac * arcs);
+          const arcPos = frac * arcs - arcIndex;
 
           const x = Math.cos(ang) * radius;
           const y = Math.sin(ang) * radius;
@@ -176,7 +160,7 @@
           let glow = (arcIndex % 2 === 0) ? 0.30 : 0.42;
           if (Math.random() < CONFIG.sparkleChance) { color = WHITE.clone().lerp(color, 0.2); glow = 0.6; }
 
-          const op = 0.55 + 0.45 * smooth(0.0, 0.28, f);         // centro um pouco mais suave
+          const op = 0.55 + 0.45 * smooth(0.0, 0.28, f);
           push(x, y, z, drawR, op, color, glow, radius, arcPos);
         }
       }
@@ -215,8 +199,6 @@
         void main(){
           vec4 mv = modelViewMatrix * vec4(position,1.0);
           gl_Position = projectionMatrix * mv;
-          // gradiente cíclico do arco: 1ª bolinha bem pequena -> cresce até o fim,
-          // fase anima no tempo p/ o ciclo "correr" pelo arco (ilusão de movimento)
           float g = fract(aArcPos - uTime * uFlow);
           float grow = mix(uGrowMin, 1.0, pow(g, uGrowPow));
           float diameter = aSize * grow * 2.0 * uScale / max(-mv.z, 0.001);
@@ -253,7 +235,6 @@
         void main(){
           vec4 mv = modelViewMatrix * vec4(position,1.0);
           gl_Position = projectionMatrix * mv;
-          // mesmo gradiente cíclico do shader nítido -> halo acompanha o tamanho
           float g = fract(aArcPos - uTime * uFlow);
           float grow = mix(uGrowMin, 1.0, pow(g, uGrowPow));
           float diameter = aSize * grow * 2.0 * uScale / max(-mv.z, 0.001) * uGlowScale;
@@ -279,7 +260,6 @@
     const glowPoints = new THREE.Points(geo, glow); glowPoints.renderOrder = 1; glowPoints.frustumCulled = false; spinGroup.add(glowPoints);
     const crispPoints = new THREE.Points(geo, crisp); crispPoints.renderOrder = 2; crispPoints.frustumCulled = false; spinGroup.add(crispPoints);
 
-    // núcleo sutil
     const coreGeo = new THREE.BufferGeometry();
     coreGeo.setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0], 3));
     const coreUniforms = { uTime: { value: 0 }, uPixelRatio: { value: 1 }, uScale: { value: 1 } };
@@ -305,9 +285,6 @@
     });
     const corePoints = new THREE.Points(coreGeo, coreMat); corePoints.renderOrder = 0; tiltGroup.add(corePoints);
 
-    // ============================================================
-    // ESPAÇO: nebulosa + estrelas
-    // ============================================================
     const nebGeo = new THREE.BufferGeometry();
     const nebPos = [], nebCol = [], nebSize = [];
     const nebColors = [new THREE.Color(0x14506b), new THREE.Color(0x1d6f7a), new THREE.Color(0x2a3f7a)];
@@ -394,7 +371,6 @@
     });
     const stars = new THREE.Points(starGeo, starMat); stars.renderOrder = -1; scene.add(stars);
 
-    // ---------------- resize ----------------
     function resize() {
       const rect = canvas.getBoundingClientRect();
       const w = rect.width || window.innerWidth;
@@ -410,21 +386,18 @@
       nebMat.uniforms.uPixelRatio.value = dpr; nebMat.uniforms.uScale.value = scale;
       starMat.uniforms.uPixelRatio.value = dpr;
       camBase.set(0, 0.05, w < 700 ? 3.5 : 2.75);
-      // o desvio da perspectiva é inversamente proporcional à distância da câmera,
-      // então o lift acompanha o breakpoint e o enquadramento fica igual em qualquer tela
       tiltGroup.position.y = CONFIG.centerLift / camBase.z;
     }
+
     window.addEventListener("resize", resize);
     resize();
 
-    // ---------------- parallax ----------------
     const ptr = { x: 0, y: 0, tx: 0, ty: 0 };
     window.addEventListener("pointermove", (e) => {
       ptr.tx = (e.clientX / window.innerWidth - 0.5) * 2;
       ptr.ty = (e.clientY / window.innerHeight - 0.5) * 2;
     });
 
-    // ---------------- loop ----------------
     const clock = new THREE.Clock();
     const WAVE_PERIOD = 8.0, WAVE_DUR = 2.2;
     let raf;
@@ -439,7 +412,6 @@
         uniforms.uWave.value = ph < WAVE_DUR ? (ph / WAVE_DUR) * 1.15 : -1;
       }
 
-      // sentido do giro invertido (antes era -=)
       spinGroup.rotation.z += CONFIG.spinSpeed * CONFIG.spinDir * dt;
       tiltGroup.rotation.x = CONFIG.tilt + Math.sin(t * 0.18) * 0.02;
       tiltGroup.scale.setScalar(1 + Math.sin(t * 0.4) * 0.010);
