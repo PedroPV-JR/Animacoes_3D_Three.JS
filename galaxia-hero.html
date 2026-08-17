@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Galáxia — Hero</title>
+<style>
+  :root { --bg: #010913; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { background: var(--bg); overflow: hidden; }
+  .hero {
+    position: relative; width: 100%;
+    height: 100vh; height: 100svh;
+    background:
+      radial-gradient(70% 62% at 50% 46%,
+        rgb(6 30 46) 0%, rgb(3 20 34) 34%, rgb(1 13 22) 66%, rgb(1 8 14) 100%);
+  }
+  #vortex { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .hero__content {
+    position: absolute; inset: 0;
+    display: grid; place-items: center;
+    pointer-events: none; text-align: center; color: #eaf7fb;
+    font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+</style>
+</head>
+<body>
+  <section class="hero">
+    <canvas id="vortex"></canvas>
+    <div class="hero__content">
+      <!-- <h1>Sua headline aqui</h1> -->
+    </div>
+  </section>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+  (function () {
+    "use strict";
+
+    const canvas = document.getElementById("vortex");
+    const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    const smooth = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
+    // ruído de valor 1D suave (coerente) — sem dependências
+    const fract = (x) => x - Math.floor(x);
+    const h1 = (n) => fract(Math.sin(n) * 43758.5453);
+    function vnoise(x) { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f); return h1(i) + (h1(i + 1) - h1(i)) * u; }
+    const snoise = (x) => vnoise(x) * 2 - 1; // -1..1 suave
+
+    const CYAN      = new THREE.Color(0x2fb6cf);
+    const CYAN_DEEP = new THREE.Color(0x1f93ad);
+    const PALE      = new THREE.Color(0xd6f2fa);
+    const WHITE     = new THREE.Color(0xf6feff);
+
+    const CONFIG = {
+      bg: 0x010913,
+
+      // MODELO: camadas concêntricas (círculos ao redor do centro), NÃO braços.
+      // Cada camada = 1 círculo dividido em arcos ciano/branco alternados.
+      // O vórtice nasce da torção acumulada de cada camada em relação à anterior.
+      layers: 25,            // nº de camadas (fora -> centro)
+      rMin: 0.06,            // raio da camada mais interna
+      rMax: 1.0,             // raio da camada externa
+      radiusPow: 2.0,        // distribuição dos raios (>1 = centro mais denso)
+      layerTwist: 0.30,      // torção por camada (rad) -> o efeito de vórtice
+      arcs: 4,               // divisões de cor por camada (4 = ciano/branco/ciano/branco)
+
+      dotMin: 0.002,         // bolinha nas camadas internas
+      dotMax: 0.032,         // bolinha nas camadas externas (mais grossas)
+      sizePow: 1.0,          // crescimento do tamanho fora
+      spacing: 1.28,         // bolinhas juntas no arco -> escorrimento
+
+      // gradiente cíclico dentro de cada arco (azul/branco):
+      // a 1ª bolinha do arco nasce bem pequena e cresce até o fim dele.
+      arcGrowMin: 0.02,      // escala da 1ª bolinha do arco (bem pequena)
+      arcGrowPow: 0.50,      // curva do crescimento dentro do arco
+      flowSpeed: 0.0,        // fase estática -> o movimento vem da rotação do vórtice
+
+      sparkleChance: 0.04,
+      diskThick: 0.012,      // disco fino (galáxia) -> camadas alinhadas
+      depthFreq: 0.6,        // ondulação suave do Z (ruído coerente)
+      sizeRipple: 0.10,      // variação local suave de tamanho
+      sizeRippleFreq: 0.9,
+
+      spinSpeed: prefersReduced ? 0.0 : 0.085,
+      spinDir: 1,            // sentido do giro: 1 = horário invertido (anti-horário), -1 = original
+      twinkle: prefersReduced ? 0.0 : 0.12,
+      glowStrength: 0.40,
+      glowScale: 3.3,
+
+      tilt: -0.72,
+      yaw: 0.16,
+      // enquadramento vertical: sobe a galáxia para compensar a perspectiva do disco
+      // inclinado (a metade próxima da câmera "cresce" para baixo). 0 = sem correção.
+      centerLift: 0.48,
+      parallax: 0.10,
+      stars: 1900,
+    };
+
+    // ---------------- cena / câmera ----------------
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(CONFIG.bg);
+    scene.fog = new THREE.FogExp2(CONFIG.bg, 0.02);
+
+    const camera = new THREE.PerspectiveCamera(44, 1, 0.1, 100);
+    const camBase = new THREE.Vector3(0, 0.05, 2.75);
+    camera.position.copy(camBase);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({
+      canvas, antialias: true, alpha: true, powerPreference: "high-performance",
+    });
+    renderer.setClearColor(CONFIG.bg, 1);
+
+    const tiltGroup = new THREE.Group();
+    tiltGroup.rotation.x = CONFIG.tilt; tiltGroup.rotation.y = CONFIG.yaw;
+    scene.add(tiltGroup);
+    const spinGroup = new THREE.Group();
+    tiltGroup.add(spinGroup);
+
+    // ============================================================
+    // GALÁXIA — camadas concêntricas (círculos) com torção por camada
+    // ============================================================
+    function thickness(r) { return CONFIG.diskThick * smooth(0.05, 0.6, r); }
+
+    // tamanho da bolinha pela camada (interna pequena -> externa grande)
+    function ringDotSize(f) {
+      return CONFIG.dotMin + (CONFIG.dotMax - CONFIG.dotMin) * Math.pow(f, CONFIG.sizePow);
+    }
+    // cor por arco: alterna ciano / branco (4 arcos = ciano,branco,ciano,branco)
+    function arcColor(arcIndex, f) {
+      const cyan = (arcIndex % 2 === 0);
+      const c = cyan
+        ? CYAN.clone().lerp(CYAN_DEEP, 0.25 * f)
+        : WHITE.clone().lerp(PALE, 0.12 + 0.18 * f);
+      return c.multiplyScalar(0.9 + Math.random() * 0.14);
+    }
+
+    // gera (e regenera) a geometria a partir da CONFIG atual
+    function buildGalaxyGeometry() {
+      const P = [], S = [], O = [], C = [], G = [], R = [], Nn = [], AP = [];
+      const push = (x, y, z, size, op, color, glow, radius, arcPos) => {
+        P.push(x, y, z); S.push(size); O.push(op);
+        C.push(color.r, color.g, color.b); G.push(glow);
+        R.push(radius); Nn.push(Math.random() * Math.PI * 2);
+        AP.push(arcPos);
+      };
+
+      const L = Math.max(2, Math.round(CONFIG.layers));
+      const arcs = Math.max(2, Math.round(CONFIG.arcs));
+      for (let i = 0; i < L; i++) {
+        const f = i / (L - 1);                                   // 0 centro .. 1 externa
+        const radius = CONFIG.rMin + (CONFIG.rMax - CONFIG.rMin) * Math.pow(f, CONFIG.radiusPow);
+        const ringRot = i * CONFIG.layerTwist;                   // torção acumulada -> vórtice
+        const dR = ringDotSize(f);
+
+        // nº de bolinhas p/ espaçamento de arco ~ constante (escorrimento)
+        const circ = 2 * Math.PI * radius;
+        const gap = 2 * dR * CONFIG.spacing;
+        const nDots = Math.max(arcs * 2, Math.round(circ / gap));
+
+        for (let m = 0; m < nDots; m++) {
+          const frac = m / nDots;                                // 0..1 em volta da camada
+          const ang = ringRot + frac * Math.PI * 2;              // bolinha girada com a camada
+          const arcIndex = Math.floor(frac * arcs);              // qual arco (cor)
+          const arcPos = frac * arcs - arcIndex;                 // 0..1 dentro do arco (1ª bolinha = 0)
+
+          const x = Math.cos(ang) * radius;
+          const y = Math.sin(ang) * radius;
+          const z = snoise(i * 3.7 + m * CONFIG.depthFreq) * thickness(radius);
+          const drawR = dR * (1 + CONFIG.sizeRipple * snoise(i * 5.1 + m * CONFIG.sizeRippleFreq));
+
+          let color = arcColor(arcIndex, f);
+          let glow = (arcIndex % 2 === 0) ? 0.30 : 0.42;
+          if (Math.random() < CONFIG.sparkleChance) { color = WHITE.clone().lerp(color, 0.2); glow = 0.6; }
+
+          const op = 0.55 + 0.45 * smooth(0.0, 0.28, f);         // centro um pouco mais suave
+          push(x, y, z, drawR, op, color, glow, radius, arcPos);
+        }
+      }
+
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(P, 3));
+      g.setAttribute("aSize",    new THREE.Float32BufferAttribute(S, 1));
+      g.setAttribute("aOpacity", new THREE.Float32BufferAttribute(O, 1));
+      g.setAttribute("aColor",   new THREE.Float32BufferAttribute(C, 3));
+      g.setAttribute("aGlow",    new THREE.Float32BufferAttribute(G, 1));
+      g.setAttribute("aRadius",  new THREE.Float32BufferAttribute(R, 1));
+      g.setAttribute("aRand",    new THREE.Float32BufferAttribute(Nn, 1));
+      g.setAttribute("aArcPos",  new THREE.Float32BufferAttribute(AP, 1));
+      return g;
+    }
+
+    let geo = buildGalaxyGeometry();
+
+    const uniforms = {
+      uTime: { value: 0 }, uPixelRatio: { value: 1 }, uScale: { value: 1 },
+      uTwinkle: { value: CONFIG.twinkle }, uWave: { value: -1 },
+      uGlowScale: { value: CONFIG.glowScale }, uGlowStr: { value: CONFIG.glowStrength },
+      uFlow: { value: prefersReduced ? 0.0 : CONFIG.flowSpeed },
+      uGrowMin: { value: CONFIG.arcGrowMin }, uGrowPow: { value: CONFIG.arcGrowPow },
+    };
+
+    const crisp = new THREE.ShaderMaterial({
+      uniforms, transparent: true, depthWrite: false, depthTest: false,
+      blending: THREE.NormalBlending,
+      vertexShader: `
+        attribute float aSize; attribute float aOpacity; attribute vec3 aColor;
+        attribute float aRadius; attribute float aRand; attribute float aArcPos;
+        uniform float uTime, uPixelRatio, uScale, uTwinkle, uWave;
+        uniform float uFlow, uGrowMin, uGrowPow;
+        varying float vOpacity; varying vec3 vColor; varying float vWave;
+        void main(){
+          vec4 mv = modelViewMatrix * vec4(position,1.0);
+          gl_Position = projectionMatrix * mv;
+          // gradiente cíclico do arco: 1ª bolinha bem pequena -> cresce até o fim,
+          // fase anima no tempo p/ o ciclo "correr" pelo arco (ilusão de movimento)
+          float g = fract(aArcPos - uTime * uFlow);
+          float grow = mix(uGrowMin, 1.0, pow(g, uGrowPow));
+          float diameter = aSize * grow * 2.0 * uScale / max(-mv.z, 0.001);
+          gl_PointSize = clamp(diameter * uPixelRatio, 1.0, 110.0 * uPixelRatio);
+          float tw = 1.0 - uTwinkle * (0.5+0.5*sin(uTime*1.7+aRand)) * (0.5+0.5*sin(uTime*0.9+aRand*1.7));
+          float w = uWave >= 0.0 ? smoothstep(0.12, 0.0, abs(aRadius - uWave)) : 0.0;
+          vWave = w;
+          vOpacity = clamp(aOpacity * tw * mix(0.55, 1.0, g) + w * 0.30, 0.0, 1.0);
+          vColor = aColor;
+        }
+      `,
+      fragmentShader: `
+        precision mediump float;
+        varying float vOpacity; varying vec3 vColor; varying float vWave;
+        void main(){
+          vec2 uv = gl_PointCoord - 0.5; float d = length(uv);
+          if(d > 0.5) discard;
+          float a = smoothstep(0.5, 0.42, d);
+          vec3 col = vColor + vec3(0.85,0.96,1.0) * vWave * 0.5;
+          gl_FragColor = vec4(col, a * vOpacity);
+        }
+      `,
+    });
+
+    const glow = new THREE.ShaderMaterial({
+      uniforms, transparent: true, depthWrite: false, depthTest: false,
+      blending: THREE.AdditiveBlending,
+      vertexShader: `
+        attribute float aSize; attribute float aOpacity; attribute vec3 aColor;
+        attribute float aGlow; attribute float aRadius; attribute float aRand; attribute float aArcPos;
+        uniform float uTime, uPixelRatio, uScale, uWave, uGlowScale;
+        uniform float uFlow, uGrowMin, uGrowPow;
+        varying float vAlpha; varying vec3 vColor;
+        void main(){
+          vec4 mv = modelViewMatrix * vec4(position,1.0);
+          gl_Position = projectionMatrix * mv;
+          // mesmo gradiente cíclico do shader nítido -> halo acompanha o tamanho
+          float g = fract(aArcPos - uTime * uFlow);
+          float grow = mix(uGrowMin, 1.0, pow(g, uGrowPow));
+          float diameter = aSize * grow * 2.0 * uScale / max(-mv.z, 0.001) * uGlowScale;
+          gl_PointSize = clamp(diameter * uPixelRatio, 1.0, 280.0 * uPixelRatio);
+          float w = uWave >= 0.0 ? smoothstep(0.12, 0.0, abs(aRadius - uWave)) : 0.0;
+          float pulse = 0.65 + 0.35 * sin(uTime * 1.3 + aRand);
+          vAlpha = (aOpacity * aGlow * pulse) * mix(0.45, 1.0, g) + w * aGlow * 0.9;
+          vColor = aColor;
+        }
+      `,
+      fragmentShader: `
+        precision mediump float;
+        uniform float uGlowStr;
+        varying float vAlpha; varying vec3 vColor;
+        void main(){
+          vec2 uv = gl_PointCoord - 0.5; float d = length(uv);
+          float halo = pow(smoothstep(0.5, 0.0, d), 1.9);
+          gl_FragColor = vec4(vColor, halo * vAlpha * uGlowStr);
+        }
+      `,
+    });
+
+    const glowPoints = new THREE.Points(geo, glow); glowPoints.renderOrder = 1; glowPoints.frustumCulled = false; spinGroup.add(glowPoints);
+    const crispPoints = new THREE.Points(geo, crisp); crispPoints.renderOrder = 2; crispPoints.frustumCulled = false; spinGroup.add(crispPoints);
+
+    // núcleo sutil
+    const coreGeo = new THREE.BufferGeometry();
+    coreGeo.setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0], 3));
+    const coreUniforms = { uTime: { value: 0 }, uPixelRatio: { value: 1 }, uScale: { value: 1 } };
+    const coreMat = new THREE.ShaderMaterial({
+      uniforms: coreUniforms, transparent: true, depthWrite: false, depthTest: false,
+      blending: THREE.AdditiveBlending,
+      vertexShader: `
+        uniform float uTime, uPixelRatio, uScale;
+        void main(){
+          vec4 mv = modelViewMatrix * vec4(position,1.0);
+          gl_Position = projectionMatrix * mv;
+          gl_PointSize = 0.30 * uScale / max(-mv.z,0.001) * uPixelRatio * (0.9 + 0.1*sin(uTime*0.8));
+        }
+      `,
+      fragmentShader: `
+        precision mediump float;
+        void main(){
+          vec2 uv = gl_PointCoord - 0.5; float d = length(uv);
+          float core = pow(smoothstep(0.5, 0.0, d), 2.6);
+          gl_FragColor = vec4(mix(vec3(0.5,0.9,1.0), vec3(1.0), core), core * 0.30);
+        }
+      `,
+    });
+    const corePoints = new THREE.Points(coreGeo, coreMat); corePoints.renderOrder = 0; tiltGroup.add(corePoints);
+
+    // ============================================================
+    // ESPAÇO: nebulosa + estrelas
+    // ============================================================
+    const nebGeo = new THREE.BufferGeometry();
+    const nebPos = [], nebCol = [], nebSize = [];
+    const nebColors = [new THREE.Color(0x14506b), new THREE.Color(0x1d6f7a), new THREE.Color(0x2a3f7a)];
+    for (let i = 0; i < 5; i++) {
+      const ang = Math.random() * Math.PI * 2, rad = 1.2 + Math.random() * 2.2;
+      nebPos.push(Math.cos(ang) * rad, Math.sin(ang) * rad * 0.6, -2.5 - Math.random() * 3);
+      const c = nebColors[i % nebColors.length];
+      nebCol.push(c.r, c.g, c.b); nebSize.push(3.5 + Math.random() * 3.0);
+    }
+    nebGeo.setAttribute("position", new THREE.Float32BufferAttribute(nebPos, 3));
+    nebGeo.setAttribute("aColor", new THREE.Float32BufferAttribute(nebCol, 3));
+    nebGeo.setAttribute("aSize", new THREE.Float32BufferAttribute(nebSize, 1));
+    const nebMat = new THREE.ShaderMaterial({
+      uniforms: { uScale: { value: 1 }, uPixelRatio: { value: 1 } },
+      transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending,
+      vertexShader: `
+        attribute vec3 aColor; attribute float aSize;
+        uniform float uScale, uPixelRatio; varying vec3 vColor;
+        void main(){
+          vec4 mv = modelViewMatrix * vec4(position,1.0);
+          gl_Position = projectionMatrix * mv; vColor = aColor;
+          gl_PointSize = aSize * uScale / max(-mv.z,0.001) * uPixelRatio;
+        }
+      `,
+      fragmentShader: `
+        precision mediump float; varying vec3 vColor;
+        void main(){
+          vec2 uv = gl_PointCoord - 0.5; float d = length(uv);
+          float a = pow(smoothstep(0.5, 0.0, d), 2.2);
+          gl_FragColor = vec4(vColor, a * 0.10);
+        }
+      `,
+    });
+    const nebula = new THREE.Points(nebGeo, nebMat); nebula.renderOrder = -2; scene.add(nebula);
+
+    const starGeo = new THREE.BufferGeometry();
+    const sPos = [], sCol = [], sSize = [], sRand = [], sTw = [];
+    const starPalette = [
+      { c: new THREE.Color(0xffffff), w: 0.62 }, { c: new THREE.Color(0xcfe0ff), w: 0.16 },
+      { c: new THREE.Color(0x9fe8f2), w: 0.12 }, { c: new THREE.Color(0xbfd0ff), w: 0.06 },
+      { c: new THREE.Color(0xffe6c4), w: 0.04 },
+    ];
+    function pickStarColor() {
+      let x = Math.random(), acc = 0;
+      for (const p of starPalette) { acc += p.w; if (x <= acc) return p.c; }
+      return starPalette[0].c;
+    }
+    for (let i = 0; i < CONFIG.stars; i++) {
+      const u = Math.random() * 2 - 1, ph = Math.random() * Math.PI * 2;
+      const s = Math.sqrt(1 - u * u), rad = 7 + Math.random() * 12;
+      sPos.push(Math.cos(ph) * s * rad, Math.sin(ph) * s * rad, u * rad);
+      const c = pickStarColor(); sCol.push(c.r, c.g, c.b);
+      const big = Math.random() < 0.06;
+      sSize.push(big ? 2.4 + Math.random() * 1.6 : 0.7 + Math.random() * 1.4);
+      sRand.push(Math.random() * Math.PI * 2); sTw.push(0.6 + Math.random() * 1.8);
+    }
+    starGeo.setAttribute("position", new THREE.Float32BufferAttribute(sPos, 3));
+    starGeo.setAttribute("aColor", new THREE.Float32BufferAttribute(sCol, 3));
+    starGeo.setAttribute("aSize", new THREE.Float32BufferAttribute(sSize, 1));
+    starGeo.setAttribute("aRand", new THREE.Float32BufferAttribute(sRand, 1));
+    starGeo.setAttribute("aTw", new THREE.Float32BufferAttribute(sTw, 1));
+    const starMat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 }, uPixelRatio: { value: 1 }, uTwinkle: { value: prefersReduced ? 0 : 1 } },
+      transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending,
+      vertexShader: `
+        attribute vec3 aColor; attribute float aSize; attribute float aRand; attribute float aTw;
+        uniform float uTime, uPixelRatio, uTwinkle;
+        varying vec3 vColor; varying float vA;
+        void main(){
+          vec4 mv = modelViewMatrix * vec4(position,1.0);
+          gl_Position = projectionMatrix * mv;
+          gl_PointSize = aSize * uPixelRatio;
+          vA = 1.0 - uTwinkle * 0.5 * (0.5 + 0.5 * sin(uTime * aTw + aRand));
+          vColor = aColor;
+        }
+      `,
+      fragmentShader: `
+        precision mediump float; varying vec3 vColor; varying float vA;
+        void main(){
+          vec2 uv = gl_PointCoord - 0.5; float d = length(uv);
+          gl_FragColor = vec4(vColor, smoothstep(0.5, 0.05, d) * vA);
+        }
+      `,
+    });
+    const stars = new THREE.Points(starGeo, starMat); stars.renderOrder = -1; scene.add(stars);
+
+    // ---------------- resize ----------------
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      const w = rect.width || window.innerWidth;
+      const h = rect.height || window.innerHeight;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      renderer.setPixelRatio(dpr);
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h; camera.updateProjectionMatrix();
+      const fov = (camera.fov * Math.PI) / 180;
+      const scale = h / (2 * Math.tan(fov / 2));
+      uniforms.uPixelRatio.value = dpr; uniforms.uScale.value = scale;
+      coreUniforms.uPixelRatio.value = dpr; coreUniforms.uScale.value = scale;
+      nebMat.uniforms.uPixelRatio.value = dpr; nebMat.uniforms.uScale.value = scale;
+      starMat.uniforms.uPixelRatio.value = dpr;
+      camBase.set(0, 0.05, w < 700 ? 3.5 : 2.75);
+      // o desvio da perspectiva é inversamente proporcional à distância da câmera,
+      // então o lift acompanha o breakpoint e o enquadramento fica igual em qualquer tela
+      tiltGroup.position.y = CONFIG.centerLift / camBase.z;
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    // ---------------- parallax ----------------
+    const ptr = { x: 0, y: 0, tx: 0, ty: 0 };
+    window.addEventListener("pointermove", (e) => {
+      ptr.tx = (e.clientX / window.innerWidth - 0.5) * 2;
+      ptr.ty = (e.clientY / window.innerHeight - 0.5) * 2;
+    });
+
+    // ---------------- loop ----------------
+    const clock = new THREE.Clock();
+    const WAVE_PERIOD = 8.0, WAVE_DUR = 2.2;
+    let raf;
+    function animate() {
+      raf = requestAnimationFrame(animate);
+      const dt = Math.min(clock.getDelta(), 0.05);
+      const t = clock.elapsedTime;
+      uniforms.uTime.value = t; coreUniforms.uTime.value = t; starMat.uniforms.uTime.value = t;
+
+      if (!prefersReduced) {
+        const ph = t % WAVE_PERIOD;
+        uniforms.uWave.value = ph < WAVE_DUR ? (ph / WAVE_DUR) * 1.15 : -1;
+      }
+
+      // sentido do giro invertido (antes era -=)
+      spinGroup.rotation.z += CONFIG.spinSpeed * CONFIG.spinDir * dt;
+      tiltGroup.rotation.x = CONFIG.tilt + Math.sin(t * 0.18) * 0.02;
+      tiltGroup.scale.setScalar(1 + Math.sin(t * 0.4) * 0.010);
+      stars.rotation.y += dt * 0.004;
+
+      ptr.x += (ptr.tx - ptr.x) * 0.05;
+      ptr.y += (ptr.ty - ptr.y) * 0.05;
+      camera.position.x = camBase.x + ptr.x * CONFIG.parallax;
+      camera.position.y = camBase.y - ptr.y * CONFIG.parallax;
+      camera.position.z = camBase.z; camera.lookAt(0, 0, 0);
+
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) cancelAnimationFrame(raf);
+      else { clock.getDelta(); animate(); }
+    });
+  })();
+  </script>
+</body>
+</html>
